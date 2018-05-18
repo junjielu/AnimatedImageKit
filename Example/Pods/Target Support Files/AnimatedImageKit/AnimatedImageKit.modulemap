@@ -1,0 +1,6 @@
+framework module AnimatedImageKit {
+  umbrella header "AnimatedImageKit-umbrella.h"
+
+  export *
+  module * { export * }
+}
