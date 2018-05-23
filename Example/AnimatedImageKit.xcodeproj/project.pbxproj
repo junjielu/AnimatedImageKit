@@ -15,6 +15,7 @@
 		607FACEC1AFB9204008FA782 /* Tests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 607FACEB1AFB9204008FA782 /* Tests.swift */; };
 		9F10F27656DEE231D92116A8 /* Pods_AnimatedImageKit_Example.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 7572464E9DB8210B123D6511 /* Pods_AnimatedImageKit_Example.framework */; };
 		B4CF356C11620D186E699E5D /* Pods_AnimatedImageKit_Tests.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = F44D0158F36FFBBF31C3D9D2 /* Pods_AnimatedImageKit_Tests.framework */; };
+		D168CE9B20B3030C00875EFC /* rock.gif in Resources */ = {isa = PBXBuildFile; fileRef = D168CE9A20B3030C00875EFC /* rock.gif */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -45,6 +46,7 @@
 		A04F12BDB66A2047D6205103 /* AnimatedImageKit.podspec */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text; name = AnimatedImageKit.podspec; path = ../AnimatedImageKit.podspec; sourceTree = "<group>"; };
 		BA55E1C81EBD31E2102776F9 /* Pods-AnimatedImageKit_Example.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-AnimatedImageKit_Example.release.xcconfig"; path = "Pods/Target Support Files/Pods-AnimatedImageKit_Example/Pods-AnimatedImageKit_Example.release.xcconfig"; sourceTree = "<group>"; };
 		BB628C1924C0E1E28D92A0C7 /* Pods-AnimatedImageKit_Example.debug.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-AnimatedImageKit_Example.debug.xcconfig"; path = "Pods/Target Support Files/Pods-AnimatedImageKit_Example/Pods-AnimatedImageKit_Example.debug.xcconfig"; sourceTree = "<group>"; };
+		D168CE9A20B3030C00875EFC /* rock.gif */ = {isa = PBXFileReference; lastKnownFileType = image.gif; path = rock.gif; sourceTree = "<group>"; };
 		F44D0158F36FFBBF31C3D9D2 /* Pods_AnimatedImageKit_Tests.framework */ = {isa = PBXFileReference; explicitFileType = wrapper.framework; includeInIndex = 0; path = Pods_AnimatedImageKit_Tests.framework; sourceTree = BUILT_PRODUCTS_DIR; };
 		FD41D9B0CB354792CF82C45B /* Pods-AnimatedImageKit_Tests.release.xcconfig */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = text.xcconfig; name = "Pods-AnimatedImageKit_Tests.release.xcconfig"; path = "Pods/Target Support Files/Pods-AnimatedImageKit_Tests/Pods-AnimatedImageKit_Tests.release.xcconfig"; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -104,6 +106,7 @@
 			children = (
 				607FACD51AFB9204008FA782 /* AppDelegate.swift */,
 				607FACD71AFB9204008FA782 /* ViewController.swift */,
+				D168CE9A20B3030C00875EFC /* rock.gif */,
 				607FACD91AFB9204008FA782 /* Main.storyboard */,
 				607FACDC1AFB9204008FA782 /* Images.xcassets */,
 				607FACDE1AFB9204008FA782 /* LaunchScreen.xib */,
@@ -250,6 +253,7 @@
 				607FACDB1AFB9204008FA782 /* Main.storyboard in Resources */,
 				607FACE01AFB9204008FA782 /* LaunchScreen.xib in Resources */,
 				607FACDD1AFB9204008FA782 /* Images.xcassets in Resources */,
+				D168CE9B20B3030C00875EFC /* rock.gif in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

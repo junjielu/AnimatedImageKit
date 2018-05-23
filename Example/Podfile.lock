@@ -18,7 +18,7 @@ EXTERNAL SOURCES:
     :path: "../"
 
 SPEC CHECKSUMS:
-  AnimatedImageKit: 0f860dec0b221b3d454266f2c208a027aea1c0b4
+  AnimatedImageKit: 1e7257885569d065aa74481cd5cb03e7ea9d51f2
   Nimble: 7f5a9c447a33002645a071bddafbfb24ea70e0ac
   Quick: 58d203b1c5e27fff7229c4c1ae445ad7069a7a08
 

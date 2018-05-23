@@ -2,7 +2,7 @@
   "name": "AnimatedImageKit",
   "version": "0.1.0",
   "summary": "A short description of AnimatedImageKit.",
-  "description": "TODO: Add long description of the pod here.",
+  "description": "Test",
   "homepage": "https://github.com/junjielu/AnimatedImageKit",
   "license": {
     "type": "MIT",
@@ -18,5 +18,11 @@
   "platforms": {
     "ios": "8.0"
   },
-  "source_files": "AnimatedImageKit/Classes/**/*"
+  "source_files": "AnimatedImageKit/Classes/**/*",
+  "frameworks": [
+    "QuartzCore",
+    "ImageIO",
+    "MobileCoreServices",
+    "CoreGraphics"
+  ]
 }
