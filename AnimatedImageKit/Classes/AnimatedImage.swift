@@ -50,6 +50,20 @@ public class AnimatedImage {
         }
     }
     
+    private var frameCacheSizeMaxInternal: Int = 0 {
+        didSet {
+            if frameCacheSizeMaxInternal != oldValue {
+                
+                // Remember whether the new cap will cause the current cache size to shrink; then we'll make sure to purge from the cache if needed.
+                let willFrameCacheSizeShrink = frameCacheSizeMaxInternal < self.currentFrameCacheSize
+                
+                if willFrameCacheSizeShrink {
+                    self.purgeFrameCacheIfNeeded()
+                }
+            }
+        }
+    }
+    
     var cachedFrames = [Int: UIImage]()
     var cachedFrameIndexes: IndexSet {
         return IndexSet(cachedFrames.keys)
@@ -161,6 +175,14 @@ public class AnimatedImage {
         }
         // In any case, cap the optimal cache size at the frame count.
         self.frameCacheSizeOptimal = min(frameCacheSize, frameCount)
+        
+        NotificationCenter.default.addObserver(forName: Notification.Name.UIApplicationDidReceiveMemoryWarning, object: nil, queue: OperationQueue.main) { [weak self] notification in
+            self?.didReceiveMemoryWarning(notification)
+        }
+    }
+    
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
     
     var requestedFrameIndex: Int = 0
@@ -257,6 +279,10 @@ public class AnimatedImage {
             currentFrameCacheSize = min(currentFrameCacheSize, frameCacheSizeMax)
         }
         
+        if self.frameCacheSizeMaxInternal > AnimatedImageFrameCacheSize.noLimit.rawValue {
+            currentFrameCacheSize = min(currentFrameCacheSize, self.frameCacheSizeMaxInternal);
+        }
+        
         return currentFrameCacheSize
     }
     
@@ -304,17 +330,65 @@ public class AnimatedImage {
         }
     }
     
+    private var resetFrameCacheSizeMaxInternalWork: DispatchWorkItem?
     func growFrameCacheSizeAfterMemoryWarning() {
+        self.frameCacheSizeMaxInternal = AnimatedImageFrameCacheSize.growAfterMemoryWarning.rawValue
         
+        // Schedule resetting the frame cache size max completely after a while.
+        self.resetFrameCacheSizeMaxInternalWork = DispatchWorkItem { [weak self] in
+            self?.resetFrameCacheSizeMaxInternal()
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            self.resetFrameCacheSizeMaxInternalWork?.perform()
+        }
     }
     
     func resetFrameCacheSizeMaxInternal() {
-        
+        self.frameCacheSizeMaxInternal = AnimatedImageFrameCacheSize.noLimit.rawValue
     }
     
     // MARK: System Memory Warnings Notification Handler
+    private var memoryWarningCount: Int = 0
+    private var growFrameCacheSizeAfterMemoryWarningWork: DispatchWorkItem?
     func didReceiveMemoryWarning(_ notification: Notification) {
+        self.memoryWarningCount += 1
         
+        // If we were about to grow larger, but got rapped on our knuckles by the system again, cancel.
+        growFrameCacheSizeAfterMemoryWarningWork?.cancel()
+        growFrameCacheSizeAfterMemoryWarningWork = nil
+        
+        resetFrameCacheSizeMaxInternalWork?.cancel()
+        resetFrameCacheSizeMaxInternalWork = nil
+        
+        // Go down to the minimum and by that implicitly immediately purge from the cache if needed to not get jettisoned by the system and start producing frames on-demand.
+        
+        self.frameCacheSizeMaxInternal = AnimatedImageFrameCacheSize.lowMemory.rawValue
+        
+        // Schedule growing larger again after a while, but cap our attempts to prevent a periodic sawtooth wave (ramps upward and then sharply drops) of memory usage.
+        //
+        // [mem]^     (2)   (5)  (6)        1) Loading frames for the first time
+        //   (*)|      ,     ,    ,         2) Mem warning #1; purge cache
+        //      |     /| (4)/|   /|         3) Grow cache size a bit after a while, if no mem warning occurs
+        //      |    / |  _/ | _/ |         4) Try to grow cache size back to optimum after a while, if no mem warning occurs
+        //      |(1)/  |_/   |/   |__(7)    5) Mem warning #2; purge cache
+        //      |__/   (3)                  6) After repetition of (3) and (4), mem warning #3; purge cache
+        //      +---------------------->    7) After 3 mem warnings, stay at minimum cache size
+        //                            [t]
+        //                                  *) The mem high water mark before we get warned might change for every cycle.
+        //
+        let growAttempsMax: Int = 2
+        let growDelay: TimeInterval = 2.0
+        
+        if self.memoryWarningCount - 1 <= growAttempsMax {
+            self.growFrameCacheSizeAfterMemoryWarningWork = DispatchWorkItem {
+                self.growFrameCacheSizeAfterMemoryWarning()
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + growDelay) {
+                self.growFrameCacheSizeAfterMemoryWarningWork?.perform()
+            }
+        }
+        
+        // Note: It's not possible to get the level of a memory warning with a public API: http://stackoverflow.com/questions/2915247/iphone-os-memory-warnings-what-do-the-different-levels-mean/2915477#2915477
     }
     
     // MARK: Image decoding
