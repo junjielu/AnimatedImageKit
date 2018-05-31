@@ -135,12 +135,11 @@ public class AnimatedImageView: UIImageView {
     
     // MARK: Animating Images
     func frameDelayGreatestCommonDivisor() -> TimeInterval {
-        // Presision is set to half of the `kFLAnimatedImageDelayTimeIntervalMinimum` in order to minimize frame dropping.
         let greatestCommonDivisorPrecision: TimeInterval = 2.0 / 0.02
         
         if let delays = self.animatedImage?.delayTimes.values {
-            // Scales the frame delays by `kGreatestCommonDivisorPrecision`
-            // then converts it to an UInteger for in order to calculate the GCD.
+            // Scales the frame delays by `greatestCommonDivisorPrecision`
+            // then converts it to an Int for in order to calculate the GCD.
             var scaledGCD = lrint(Double(delays.first ?? 0) * greatestCommonDivisorPrecision)
             for delay in delays {
                 scaledGCD = greatestCommonDivisor(lrint(Double(delay) * greatestCommonDivisorPrecision), with: scaledGCD)
@@ -231,7 +230,7 @@ public class AnimatedImageView: UIImageView {
         // If we don't have a frame delay (e.g. corrupt frame), don't update the view but skip the playhead to the next frame (in else-block).
         // If we have a nil image (e.g. waiting for frame), don't update the view nor playhead.
         if let delayTime = animatedImage.delayTimes[currentFrameIndex], let image = animatedImage.imageLazilyCached(at: currentFrameIndex) {
-            self.currentFrame = image;
+            self.currentFrame = image
             if self.needsDisplayWhenImageBecomesAvailable {
                 self.layer.setNeedsDisplay()
                 self.needsDisplayWhenImageBecomesAvailable = false

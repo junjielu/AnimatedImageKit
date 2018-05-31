@@ -10,65 +10,65 @@ import ImageIO
 import MobileCoreServices
 
 public class AnimatedImage {
-    public enum AnimatedImageFrameCacheSize: Int {
+    public enum FrameCacheCountPolicy: Int {
+        // 0 means no specific limit
         case noLimit = 0
+        // The minimum frame cache size; this will produce frames on-demand.
         case lowMemory = 1
+        // If we can produce the frames faster than we consume, one frame ahead will already result in a stutter-free playback.
         case growAfterMemoryWarning = 2
+        // Build up a comfy buffer window to cope with CPU hiccups etc.
         case `default` = 5
     }
     
-    public enum AnimatedImageDataSizeCategory: CGFloat {
-        case all = 10       // All frames permanently in memory (be nice to the CPU)
-        case `default` = 75  // A frame cache of default size in memory (usually real-time performance and keeping low memory profile)
-        case onDemand = 250 // Only keep one frame at the time in memory (easier on memory, slowest performance)
-        case unsupported     // Even for one frame too large, computer says no.
+    public enum ImageDataSizeCategory: CGFloat {
+        // All frames permanently in memory (be nice to the CPU)
+        case all = 10
+        // A frame cache of default size in memory (usually real-time performance and keeping low memory profile)
+        case `default` = 75
+        // Only keep one frame at the time in memory (easier on memory, slowest performance)
+        case onDemand = 250
+        // Even for one frame too large, computer says no.
+        case unsupported
     }
     
-    static let serialQueue = DispatchQueue(label: "com.animatedkit.framecachingqueue")
+    static private let serialQueue = DispatchQueue(label: "com.animatedkit.framecachingqueue")
     
+    
+    /// The initialized image data.
     public let data: Data
     
+    /// The first frame image, usually equivalent to ```imageLazilyCached(at :0)```.
     public var posterImage: UIImage?
-    public var posterImageSize: CGSize?
+    /// Index of poster image.
     public var posterImageFrameIndex: Int?
     
+    /// The animation loop count, 0 means repeating the animation indefinitely.
     public var loopCount: Int
+    /// Number of valid image frames.
     public var frameCount: Int
+    /// In animated image animation, each frame will be presented with a display duration.
     public var delayTimes = [Int: CGFloat]()
     
-    public let frameCacheSizeOptimal: Int
-    public var frameCacheSizeMax: Int = 0 {
+    /// The optimal count of frames to cache based on image size and number of frames.
+    public let optimalFrameCacheCount: Int
+    /// The max frame cache count, 0 means no specific limit (default)
+    public var frameCacheCountMax: FrameCacheCountPolicy = .noLimit {
         didSet {
-            if frameCacheSizeMax != oldValue {
-                // Remember whether the new cap will cause the current cache size to shrink; then we'll make sure to purge from the cache if needed.
-                let willFrameCacheSizeShrink = frameCacheSizeMax < self.currentFrameCacheSize
-                
-                if willFrameCacheSizeShrink {
-                    self.purgeFrameCacheIfNeeded()
+            if frameCacheCountMax != oldValue {
+                // If the new cap will cause the current cache size to shrink, then we'll make sure to purge from the cache if needed.
+                if frameCacheCountMax.rawValue < self.currentFrameCacheCount {
+                    self.cleanFrameCacheIfNeeded()
                 }
             }
         }
     }
     
-    private var frameCacheSizeMaxInternal: Int = 0 {
-        didSet {
-            if frameCacheSizeMaxInternal != oldValue {
-                
-                // Remember whether the new cap will cause the current cache size to shrink; then we'll make sure to purge from the cache if needed.
-                let willFrameCacheSizeShrink = frameCacheSizeMaxInternal < self.currentFrameCacheSize
-                
-                if willFrameCacheSizeShrink {
-                    self.purgeFrameCacheIfNeeded()
-                }
-            }
-        }
-    }
-    
-    var cachedFrames = [Int: UIImage]()
-    var cachedFrameIndexes: IndexSet {
+    private var cachedFrames = [Int: UIImage]()
+    private var cachedFrameIndexes: IndexSet {
         return IndexSet(cachedFrames.keys)
     }
-    var requestedFrameIndexes = IndexSet()
+    private var cachingFrameIndexes = IndexSet()
     
     private let predrawingEnabled: Bool
     private let imageSource: CGImageSource
@@ -76,7 +76,9 @@ public class AnimatedImage {
     private let minimumDelayTimeInterval = 0.02
     
     // MARK: Life Cycle
-    public init?(animatedImageData: Data, optimalFrameCacheSize: Int = 0, predrawingEnabled: Bool = true) {
+    public init?(animatedImageData: Data,
+                 optimalFrameCacheCount: FrameCacheCountPolicy = .noLimit,
+                 predrawingEnabled: Bool = true) {
         guard animatedImageData.count > 0,
             let rawImageSource = CGImageSourceCreateWithData(animatedImageData as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
             let imageSourceContainerType = CGImageSourceGetType(rawImageSource),
@@ -89,16 +91,16 @@ public class AnimatedImage {
         self.imageSource = rawImageSource
         
         let imageProperties = CGImageSourceCopyProperties(rawImageSource, nil) as? [String: Any]
-        var loopCount = (imageProperties?[kCGImagePropertyGIFDictionary as String] as? [String: Any])?[kCGImagePropertyGIFLoopCount as String] as? Int ?? 1
-        if loopCount > 0 {
-            loopCount += 1
-        }
-        self.loopCount = loopCount
+        let gifPropertyKey = kCGImagePropertyGIFDictionary as String
+        let loopCountPropertyKey = kCGImagePropertyGIFLoopCount as String
+        
+        self.loopCount = (imageProperties?[gifPropertyKey] as? [String: Any])?[loopCountPropertyKey] as? Int ?? 0
         
         self.frameCount = CGImageSourceGetCount(rawImageSource)
         
         var skippedFrameCount = 0
         
+        // Loop to initialize poster and delayTimes.
         for index in 0..<frameCount {
             if let frameCGImage = CGImageSourceCreateImageAtIndex(rawImageSource, index, nil) {
                 let frameImage = UIImage(cgImage: frameCGImage)
@@ -106,10 +108,9 @@ public class AnimatedImage {
                 // Set poster image
                 if self.posterImage == nil {
                     self.posterImage = frameImage
-                    // Set its size to proxy our size.
-                    self.posterImageSize = frameImage.size
                     // Remember index of poster image so we never purge it; also add it to the cache.
                     self.posterImageFrameIndex = index
+                    // We need to cache poster image since it will certainly display.
                     self.cachedFrames[index] = frameImage
                 }
                 
@@ -129,14 +130,15 @@ public class AnimatedImage {
                 let frameProperties = CGImageSourceCopyPropertiesAtIndex(rawImageSource, index, nil) as? [String: Any]
                 let gifFrameProperties = frameProperties?[kCGImagePropertyGIFDictionary as String] as? [String: Any]
                 
-                // Try to use the unclamped delay time; fall back to the normal delay time.
-                // If we don't get a delay time from the properties, fall back to `kDelayTimeIntervalDefault` or carry over the preceding frame's value.
+                // If we don't get a delay time from the properties, fall back to defaultDelayInterval or carry over the preceding frame's value.
                 let defaultDelayInterval = index == 0 ? 0.1 : (delayTimes[index - 1] ?? 0.1)
+                // Try to use the unclamped delay time; fall back to the normal delay time.
                 var delayTime = gifFrameProperties?[kCGImagePropertyGIFUnclampedDelayTime as String] as? CGFloat ?? gifFrameProperties?[kCGImagePropertyGIFDelayTime as String] as? CGFloat ?? defaultDelayInterval
                 
                 // Support frame delays as low as `minimumDelayTimeInterval`, with anything below being rounded up to `minimumDelayTimeInterval` for legacy compatibility.
                 // To support the minimum even when rounding errors occur, use an epsilon when comparing. We downcast to float because that's what we get for delayTime from ImageIO.
-                if delayTime < 0.02 - CGFloat(Float.ulpOfOne) {
+                let minimumDelayTimeInterval: CGFloat = 0.02
+                if delayTime < minimumDelayTimeInterval - CGFloat(Float.ulpOfOne) {
                     delayTime = defaultDelayInterval
                 }
                 delayTimes[index] = delayTime
@@ -145,50 +147,57 @@ public class AnimatedImage {
             }
         }
         
-        guard frameCount > 0, let poster = self.posterImage, let posterSize = self.posterImageSize else {
+        guard frameCount > 0, let poster = self.posterImage else {
             return nil
         }
         
+        let frameCacheCount: Int
         // If no value is provided, select a default based on the GIF.
-        let frameCacheSize: Int
-        if optimalFrameCacheSize == 0 {
-            // Calculate the optimal frame cache size: try choosing a larger buffer window depending on the predicted image size.
+        if optimalFrameCacheCount == .noLimit {
+            // Calculate the optimal frame cache count: try choosing a larger buffer window depending on the predicted image size.
             // It's only dependent on the image size & number of frames and never changes.
             let megaByte: CGFloat = (1024 * 1024)
             let posterBytesPerRow = CGFloat(poster.cgImage?.bytesPerRow ?? 0)
-            let posterHeight = posterSize.height
+            let posterHeight = poster.size.height
             let realFrameCount = CGFloat(self.frameCount - skippedFrameCount)
             let animatedImageDataSize = posterBytesPerRow * posterHeight * realFrameCount / megaByte
             
-            if animatedImageDataSize <= AnimatedImageDataSizeCategory.all.rawValue {
-                frameCacheSize = self.frameCount
-            } else if animatedImageDataSize <= AnimatedImageDataSizeCategory.default.rawValue {
+            if animatedImageDataSize <= ImageDataSizeCategory.all.rawValue {
+                frameCacheCount = self.frameCount
+            } else if animatedImageDataSize <= ImageDataSizeCategory.default.rawValue {
                 // This value doesn't depend on device memory much because if we're not keeping all frames in memory we will always be decoding 1 frame up ahead per 1 frame that gets played and at this point we might as well just keep a small buffer just large enough to keep from running out of frames.
-                frameCacheSize = AnimatedImageFrameCacheSize.default.rawValue
+                frameCacheCount = FrameCacheCountPolicy.default.rawValue
             } else {
                 // The predicted size exceeds the limits to build up a cache and we go into low memory mode from the beginning.
-                frameCacheSize = AnimatedImageFrameCacheSize.lowMemory.rawValue
+                frameCacheCount = FrameCacheCountPolicy.lowMemory.rawValue
             }
         } else {
             // Use the provided value.
-            frameCacheSize = optimalFrameCacheSize
+            frameCacheCount = optimalFrameCacheCount.rawValue
         }
-        // In any case, cap the optimal cache size at the frame count.
-        self.frameCacheSizeOptimal = min(frameCacheSize, frameCount)
+        // In any case, cap the optimal cache count at the frame count.
+        self.optimalFrameCacheCount = min(frameCacheCount, frameCount)
         
-        NotificationCenter.default.addObserver(forName: Notification.Name.UIApplicationDidReceiveMemoryWarning, object: nil, queue: OperationQueue.main) { [weak self] notification in
-            self?.didReceiveMemoryWarning(notification)
-        }
+        // Call memory warning handler if received memory warning.
+        NotificationCenter.default.addObserver(self, selector: #selector(didReceiveMemoryWarning(_:)), name: Notification.Name.UIApplicationDidReceiveMemoryWarning, object: nil)
     }
     
     deinit {
         NotificationCenter.default.removeObserver(self)
     }
     
-    var requestedFrameIndex: Int = 0
+    private var requestedFrameIndex: Int = 0
+    
+    /// Intended to be called from main thread synchronously and will return immediately.
+    ///
+    /// If the result isn't cached, will return `nil`, the caller should then pause playback, not increment frame counter and keep polling.
+    ///
+    /// After an initial loading time, depending on `frameCacheSize`, frames should be available immediately from the cache.
+    ///
+    /// - Parameter index: The frame index to cache.
+    /// - Returns: Cached image frame.
     public func imageLazilyCached(at index: Int) -> UIImage? {
         // Early return if the requested index is beyond bounds.
-        // Note: We're comparing an index with a count and need to bail on greater than or equal to.
         if index >= self.frameCount {
             return nil
         }
@@ -201,17 +210,18 @@ public class AnimatedImage {
             // If we have frames that should be cached but aren't and aren't requested yet, request them.
             // Exclude existing cached frames, frames already requested, and specially cached poster image.
             var frameIndexesToAddToCache = self.frameIndexesToCache()
+            // Poster frame is always cached.
             if let posterImageFrameIndex = self.posterImageFrameIndex {
                 frameIndexesToAddToCache.remove(posterImageFrameIndex)
             }
+            // Filter already cached frames and caching frames.
             frameIndexesToAddToCache = frameIndexesToAddToCache.filteredIndexSet { [weak self] index in
                 guard let strongSelf = self else { return false }
-                return !strongSelf.cachedFrameIndexes.contains(index) && !strongSelf.requestedFrameIndexes.contains(index)
+                return !strongSelf.cachedFrameIndexes.contains(index) && !strongSelf.cachingFrameIndexes.contains(index)
             }
             
-            // Asynchronously add frames to our cache.
             if frameIndexesToAddToCache.count > 0 {
-                
+                // Asynchronously add frames to our cache.
                 self.addFrameIndexesToCache(frameIndexesToAddToCache)
             }
         }
@@ -220,26 +230,26 @@ public class AnimatedImage {
         let image = self.cachedFrames[index]
         
         // Purge if needed based on the current playhead position.
-        self.purgeFrameCacheIfNeeded()
+        self.cleanFrameCacheIfNeeded()
         
         return image
     }
     
-    func addFrameIndexesToCache(_ indexSet: IndexSet) {
+    private func addFrameIndexesToCache(_ indexSet: IndexSet) {
         // Order matters. First, iterate over the indexes starting from the requested frame index.
         // Then, if there are any indexes before the requested frame index, do those.
         let subIndexes = indexSet.split(separator: requestedFrameIndex)
         let prefixIndexes = subIndexes.first
         let suffixIndexes = subIndexes.last
-        // Add to the requested list before we actually kick them off, so they don't get into the queue twice.
-        self.requestedFrameIndexes = self.requestedFrameIndexes.union(indexSet)
+        // Add to the caching list before we actually kick them off, so they don't get into the queue twice.
+        self.cachingFrameIndexes = self.cachingFrameIndexes.union(indexSet)
         
         let indexHandler: (IndexSet.Element) -> Void = { [weak self] element in
             guard let strongSelf = self else { return }
             if let image = strongSelf.loadImage(at: element) {
                 DispatchQueue.main.async {
                     strongSelf.cachedFrames[element] = image
-                    strongSelf.requestedFrameIndexes.remove(element)
+                    strongSelf.cachingFrameIndexes.remove(element)
                 }
             }
         }
@@ -255,8 +265,7 @@ public class AnimatedImage {
     }
     
     // MARK: Frame Loading
-    func loadImage(at index: Int) -> UIImage? {
-        // It's very important to use the cached `_imageSource` since the random access to a frame with `CGImageSourceCreateImageAtIndex` turns from an O(1) into an O(n) operation when re-initializing the image source every time.
+    private func loadImage(at index: Int) -> UIImage? {
         guard let cgImage = CGImageSourceCreateImageAtIndex(self.imageSource, index, nil) else {
             return nil
         }
@@ -271,34 +280,31 @@ public class AnimatedImage {
     }
     
     // MARK: Frame Caching
-    var currentFrameCacheSize: Int {
-        var currentFrameCacheSize = self.frameCacheSizeOptimal
+    private var currentFrameCacheCount: Int {
+        var currentFrameCacheSize = self.optimalFrameCacheCount
         
-        // If set, respect the caps.
-        if self.frameCacheSizeMax > AnimatedImageFrameCacheSize.noLimit.rawValue {
-            currentFrameCacheSize = min(currentFrameCacheSize, frameCacheSizeMax)
-        }
-        
-        if self.frameCacheSizeMaxInternal > AnimatedImageFrameCacheSize.noLimit.rawValue {
-            currentFrameCacheSize = min(currentFrameCacheSize, self.frameCacheSizeMaxInternal);
+        // Respect max frame cache count limit.
+        if self.frameCacheCountMax.rawValue > FrameCacheCountPolicy.noLimit.rawValue {
+            currentFrameCacheSize = min(currentFrameCacheSize, frameCacheCountMax.rawValue)
         }
         
         return currentFrameCacheSize
     }
     
-    func frameIndexesToCache() -> IndexSet {
+    private func frameIndexesToCache() -> IndexSet {
         var indexesToCache = IndexSet()
         // Quick check to avoid building the index set if the number of frames to cache equals the total frame count.
-        if self.currentFrameCacheSize == self.frameCount {
+        if self.currentFrameCacheCount == self.frameCount {
             indexesToCache = IndexSet.init(integersIn: 0..<frameCount)
         } else {
-            // Add indexes to the set in two separate blocks- the first starting from the requested frame index, up to the limit or the end.
-            // The second, if needed, the remaining number of frames beginning at index zero.
-            let firstLength = min(currentFrameCacheSize, frameCount - requestedFrameIndex)
+            // Add indexes to the set in two separate ranges:
+            // 1. starting from the requested frame index, up to the limit or the end.
+            // 2. if needed, the remaining number of frames beginning at index zero.
+            let firstLength = min(currentFrameCacheCount, frameCount - requestedFrameIndex)
             let firstRange = requestedFrameIndex..<(requestedFrameIndex + firstLength)
             indexesToCache.insert(integersIn: firstRange)
             
-            let secondLength = currentFrameCacheSize - firstLength
+            let secondLength = currentFrameCacheCount - firstLength
             
             if secondLength > 0 {
                 let secondRange = 0..<secondLength
@@ -313,56 +319,41 @@ public class AnimatedImage {
         return indexesToCache
     }
     
-    func purgeFrameCacheIfNeeded() {
-        // Purge frames that are currently cached but don't need to be.
-        // But not if we're still under the number of frames to cache.
-        // This way, if all frames are allowed to be cached (the common case), we can skip all the `NSIndexSet` math below.
-        if self.cachedFrameIndexes.count > self.currentFrameCacheSize {
-            var indexesToPurge = self.cachedFrameIndexes
-            let frameIndexesToCache = self.frameIndexesToCache()
-            indexesToPurge = indexesToPurge.filteredIndexSet { element in
-                return !frameIndexesToCache.contains(element)
-            }
-            
-            indexesToPurge.forEach { [weak self] element in
-                self?.cachedFrames[element] = nil
-            }
+    /// Clean frames that are currently cached but don't need to be, if cached frames is upon `currentFrameCacheCount`.
+    private func cleanFrameCacheIfNeeded() {
+        guard self.cachedFrameIndexes.count > self.currentFrameCacheCount else {
+            return
         }
-    }
-    
-    private var resetFrameCacheSizeMaxInternalWork: DispatchWorkItem?
-    func growFrameCacheSizeAfterMemoryWarning() {
-        self.frameCacheSizeMaxInternal = AnimatedImageFrameCacheSize.growAfterMemoryWarning.rawValue
+        var frameIndexesToRemove = self.cachedFrameIndexes
+        let frameIndexesToCache = self.frameIndexesToCache()
+        // Filter indexes which need to cache.
+        frameIndexesToRemove = frameIndexesToRemove.filteredIndexSet { element in
+            return !frameIndexesToCache.contains(element)
+        }
         
-        // Schedule resetting the frame cache size max completely after a while.
-        self.resetFrameCacheSizeMaxInternalWork = DispatchWorkItem { [weak self] in
-            self?.resetFrameCacheSizeMaxInternal()
+        frameIndexesToRemove.forEach { [weak self] index in
+            self?.cachedFrames[index] = nil
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
-            self.resetFrameCacheSizeMaxInternalWork?.perform()
-        }
-    }
-    
-    func resetFrameCacheSizeMaxInternal() {
-        self.frameCacheSizeMaxInternal = AnimatedImageFrameCacheSize.noLimit.rawValue
     }
     
     // MARK: System Memory Warnings Notification Handler
     private var memoryWarningCount: Int = 0
     private var growFrameCacheSizeAfterMemoryWarningWork: DispatchWorkItem?
-    func didReceiveMemoryWarning(_ notification: Notification) {
+    private var resetFrameCacheCountMaxWork: DispatchWorkItem?
+    @objc func didReceiveMemoryWarning(_ notification: Notification) {
         self.memoryWarningCount += 1
         
         // If we were about to grow larger, but got rapped on our knuckles by the system again, cancel.
         growFrameCacheSizeAfterMemoryWarningWork?.cancel()
         growFrameCacheSizeAfterMemoryWarningWork = nil
         
-        resetFrameCacheSizeMaxInternalWork?.cancel()
-        resetFrameCacheSizeMaxInternalWork = nil
+        resetFrameCacheCountMaxWork?.cancel()
+        resetFrameCacheCountMaxWork = nil
         
         // Go down to the minimum and by that implicitly immediately purge from the cache if needed to not get jettisoned by the system and start producing frames on-demand.
         
-        self.frameCacheSizeMaxInternal = AnimatedImageFrameCacheSize.lowMemory.rawValue
+        let currentFrameCacheCountMax = self.frameCacheCountMax
+        self.frameCacheCountMax = FrameCacheCountPolicy.lowMemory
         
         // Schedule growing larger again after a while, but cap our attempts to prevent a periodic sawtooth wave (ramps upward and then sharply drops) of memory usage.
         //
@@ -380,15 +371,19 @@ public class AnimatedImage {
         let growDelay: TimeInterval = 2.0
         
         if self.memoryWarningCount - 1 <= growAttempsMax {
-            self.growFrameCacheSizeAfterMemoryWarningWork = DispatchWorkItem {
-                self.growFrameCacheSizeAfterMemoryWarning()
+            self.growFrameCacheSizeAfterMemoryWarningWork = DispatchWorkItem { [weak self] in
+                self?.frameCacheCountMax = FrameCacheCountPolicy.growAfterMemoryWarning
+                DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+                    self?.resetFrameCacheCountMaxWork?.perform()
+                }
+            }
+            self.resetFrameCacheCountMaxWork = DispatchWorkItem { [weak self] in
+                self?.frameCacheCountMax = currentFrameCacheCountMax
             }
             DispatchQueue.main.asyncAfter(deadline: .now() + growDelay) {
                 self.growFrameCacheSizeAfterMemoryWarningWork?.perform()
             }
         }
-        
-        // Note: It's not possible to get the level of a memory warning with a public API: http://stackoverflow.com/questions/2915247/iphone-os-memory-warnings-what-do-the-different-levels-mean/2915477#2915477
     }
     
     // MARK: Image decoding
