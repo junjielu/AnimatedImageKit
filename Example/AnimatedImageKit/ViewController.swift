@@ -11,17 +11,17 @@ import AnimatedImageKit
 
 class ViewController: UIViewController {
     let imageView = AnimatedImageView()
+    @IBOutlet weak var demoLabel: UILabel!
     
     override func viewDidLoad() {
         super.viewDidLoad()
         
         self.imageView.contentMode = .scaleAspectFit
         self.imageView.clipsToBounds = true
-        self.imageView.frame = CGRect(x: 0, y: 0, width: self.view.bounds.width, height: self.view.bounds.height)
+        self.imageView.frame = CGRect(x: 0, y: demoLabel.frame.maxY + 20, width: self.view.bounds.width, height: self.view.bounds.width * 9 / 16)
         self.view.addSubview(imageView)
         
-        let url = Bundle.main.url(forResource: "rock", withExtension: "gif")!
-        if let data = try? Data(contentsOf: url), let animatedImage = AnimatedImage(animatedImageData: data) {
+        if let url = Bundle.main.url(forResource: "rock", withExtension: "gif"), let data = try? Data(contentsOf: url), let animatedImage = AnimatedImage(animatedImageData: data) {
             self.imageView.animatedImage = animatedImage
         }
     }
